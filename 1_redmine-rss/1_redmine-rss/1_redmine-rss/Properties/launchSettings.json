@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "_1_redmine_rss": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 7131",
+      "launchBrowser": false
+    }
+  }
+}
