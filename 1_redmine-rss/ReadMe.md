@@ -51,7 +51,7 @@ az account list-locations
 #### RG作る
 
 ```
-az group create --name RedmineTest1RG --subscription [yourSubscription] --location [yourLocation]
+az group create --name [一意のResource Group名 例：RedmineTest1RG] --subscription [yourSubscription] --location [yourLocation]
 ```
 
 #### Bitnami redmineのOSイメージを探す
@@ -166,23 +166,208 @@ az network nsg rule delete --nsg-name RedmineTest1NSG --resource-group RedmineTe
 ```
 
 
-※以下の記載は未作成
+## CosmosDB作成
+
+### CosmosDBアカウント作成
+
+テスト用なので、課金が最小限になるサーバーレス・バックアップ2個以内で作成する
+
+```
+az cosmosdb create --resource-group RedmineTest1RG --subscription [yourSubscription] --name [一意のDB名：例 redmine-check-db] --backup-interval 1440 --backup-retention 48 --backup-policy-type Periodic --capabilities EnableServerless
+```
+
+### DB・コンテナ作成
+
+CosmosDB内にdatabaseを作成し、その中にcontainerを作成する。
+
+```
+az cosmosdb sql database create --resource-group RedmineTest1RG --subscription [yourSubscription] --account-name [一意のDB名：例 redmine-check-db] --name RssCheckData
+```
+
+```
+az cosmosdb sql container create --resource-group RedmineTest1RG --subscription [yourSubscription] --account-name [一意のDB名：例 redmine-check-db] --database-name RssCheckData --name Items --partition-key-path /date
+```
+
+以上で、次のような上下関係のコンテナが出来上がる。
+
+
+```mermaid
+
+flowchart TD
+
+subgraph cosmos[Azure CosmosDB アカウント `redmine-check-db`]
+  subgraph database[database `RssCheckData`]
+    contaier[contaier `Items`]
+  end
+end
+
+
+```
+
+
+### ConnectString確認
+
+作成したCosmosDBへFunctionsからアクセスするために、ConnectStringを確認する。
+
+```
+az cosmosdb keys list --resource-group RedmineTest1RG --subscription [yourSubscription] --name [一意のDB名：例 redmine-check-db] --type connection-strings
+```
+
+次のように、2つの読み書き用ConnectStringと、2つの読み込み専用ConnectStringが返ってくるはず。今回の用途では読み書きが必要なので、"Primary SQL Connection String"を使用する。
+
+```
+{
+  "connectionStrings": [
+    {
+      "connectionString": "AccountEndpoint=https://redmine-check-db.documents.azure.com:443/;AccountKey=Wl4frQDa～==;",
+      "description": "Primary SQL Connection String"
+    },
+    {
+      "connectionString": "AccountEndpoint=https://redmine-check-db.documents.azure.com:443/;AccountKey=Soaq～==;",
+      "description": "Secondary SQL Connection String"
+    },
+    {
+      "connectionString": "AccountEndpoint=https://redmine-check-db.documents.azure.com:443/;AccountKey=qcP4～==;",
+      "description": "Primary Read-Only SQL Connection String"
+    },
+    {
+      "connectionString": "AccountEndpoint=https://redmine-check-db.documents.azure.com:443/;AccountKey=go9d～==;",
+      "description": "Secondary Read-Only SQL Connection String"
+    }
+  ]
+}
+```
+
+
+### 作成後の確認
+
+ここで、Azureポータルの方で作成したCosmosDBの中身を見ると理解が深まる。コマンドの内容と、Azureポータルに作成されたものを見比べて、ドキュメントなどの単語がどこに当たるのかを視覚的に理解すると良い。
+
+Azureポータルを開き、上部の検索ウインドウなどから「Azure Cosmos DB」を開く。一覧に、コマンドで作成したCosmosDBアカウントが表示されているはず。（サブスクリプションなどのフィルタで非表示になっている場合があるので、注意）
+
+CosmosDBアカウントを選択し、「データエクスプローラ」メニューを選択すると、作成したDatabaseおよびContainerが見えているはず。CosmosDBを使うには最低限これだけの構造が必要であること、この後にCosmosDBを読み書きした結果がここに反映されること、といった点を確認することで、理解の助けになるはず。
+
+
+※この後の記載はまだ作成中
 
 ## DurableFunctions作成
-
 
 1. VSのプロジェクト作成のテンプレートで、「Azure Functions」を選択
 1. Functionの選択肢で「Dulable Functions Orchestration」を選択
 
+この後は、「1_redmine-rss\1_redmine-rss\1_redmine-rss.sln」のコードを参考にするか、そのまま使用すると良い
 
-## redmineからの情報取得
+### HttpStart
+
+Function1.csのHttpStartが、HTTPトリガで動かす処理の入り口になっている。
+
+次のように属性を与えると、HTTPトリガで呼び出すFunction名を変えることが出来る。
+
+```csharp
+[FunctionName("RSSPollingFuncLoop_HttpStart")]
+        public static async Task<HttpResponseMessage> HttpStart(
+```
+
+StartNewAsyncの第1引数が呼び出すFunction名になるので、ここにDurableFunctionsのOrchestratorとして使いたいFunction名を指定する。次のようにすることで、「RSSPollingFuncLoop」というAzure Functionを呼び出す。
+
+```csharp
+string instanceId = await starter.StartNewAsync("RSSPollingFuncLoop", null);
+```
+
+### RunOrchestrator
+
+Function1.csのRunOrchestratorが、DurableFunctionsのOrchestratorにあたる。
+
+次のように属性を与えると、先ほど呼び出し処理を書いた「RSSPollingFuncLoop」というAzure Functionにできる。
+
+```csharp
+
+[FunctionName("RSSPollingFuncLoop")]
+public static async Task RunOrchestrator(
+    [OrchestrationTrigger] IDurableOrchestrationContext context)
+```
+
+### 処理に使用するデータ型の定義
+
+データの入れ物として、次のクラスを作成する。
+
+```csharp
+    public class UpdateDocumentItem
+    {
+        public DateTime? Updated { get; set; }
+        public string IssueId { get; set; }
+        public string Title { get; set; }
+    }
+```
+
+
+### CosmosDBを読み書きするFunction
+
+NuGetでの参照に「Microsoft.Azure.WebJobs.Extensions.CosmosDB」を追加する。
+
+```
+<PackageReference Include="Microsoft.Azure.WebJobs.Extensions.CosmosDB" Version="3.0.10" />
+```
+
+ここでは実際のredmineの呼び出しを行う「RSSPollingFuncLoop」はまだ作成せず、固定の値を返す「RSSPollingFuncLoopDummy」というダミーを作成する。
+
+#### メソッドの定義
+
+Functionは、引数と戻り値をコード上で定義すると、それに従ってDIや入力バインド・出力バインドを行ってくれる。つまりFunctionsについて学んだ知識の多くは、メソッドの引数と戻り値の定義のところで使うことになる。次の定義を1つずつ解説する。
+
+```csharp
+public static async Task<(bool isChanged, IEnumerable<UpdateDocumentItem> updateEntry)> RSSPollingFuncDummy([ActivityTrigger] IDurableActivityContext context, ILogger log,
+    [CosmosDB("RssCheckData", "Items",
+        ConnectionStringSetting = "DbRssCheckDataConnectString",
+        SqlQuery = "select * from UpdateDocumentItems d ORDER BY d.Updated DESC OFFSET 0 LIMIT 1")]
+    IEnumerable<UpdateDocumentItem> updateDocumentLatest,
+    [CosmosDB("RssCheckData", "Items",
+        ConnectionStringSetting = "DbRssCheckDataConnectString")]
+    IAsyncCollector<UpdateDocumentItem> updateDocumentOut)
+```
+
+##### DI
+
+```csharp
+[ActivityTrigger] IDurableActivityContext context, ILogger log
+```
+
+ここは決まり文句に近いものです。
+
+DulableFunctionsからの呼び出しを行うので、IDurableActivityContextでそのコンテキストを受け取ります。
+
+ログの出力をするため、ILoggerを受け取ります。
+
+##### CosmosDB 入力バインド
+
+```csharp
+    [CosmosDB("RssCheckData", "Items",
+        ConnectionStringSetting = "DbRssCheckDataConnectString",
+        SqlQuery = "select * from UpdateDocumentItems d ORDER BY d.Updated DESC OFFSET 0 LIMIT 1")]
+```
+
+TODO:手順記載
+
+
+#### メソッドの実装
+
+TODO:手順記載
+
+
+
+## redmineのAPI呼び出し
+
+### redmineのセットアップ
+
+TODO：ssh接続してファイル開いて管理者パスワードを確認し、HTTPアクセスして管理者ログオンしてテスト用のプロジェクト・ユーザーを作る
+
+
+### redmineからの情報取得
 
 
 1. チェック対象の更新が含まれるようにしたRSSのURLと、RSSアクセス用のキーを用意
-1.
+1. 
 
-
-## 取得した情報をCosmosDBへ保存
 
 
 
