@@ -248,8 +248,6 @@ Azureポータルを開き、上部の検索ウインドウなどから「Azure 
 CosmosDBアカウントを選択し、「データエクスプローラ」メニューを選択すると、作成したDatabaseおよびContainerが見えているはず。CosmosDBを使うには最低限これだけの構造が必要であること、この後にCosmosDBを読み書きした結果がここに反映されること、といった点を確認することで、理解の助けになるはず。
 
 
-※この後の記載はまだ作成中
-
 ## DurableFunctions作成
 
 1. VSのプロジェクト作成のテンプレートで、「Azure Functions」を選択
@@ -303,13 +301,15 @@ public static async Task RunOrchestrator(
 
 ### CosmosDBを読み書きするFunction
 
+ここでは実際のredmineの呼び出しを行う「RSSPollingFuncLoop」はまだ作成せず、固定の値を返す「RSSPollingFuncLoopDummy」というダミーを作成する。
+
+#### 必要なライブラリの参照
+
 NuGetでの参照に「Microsoft.Azure.WebJobs.Extensions.CosmosDB」を追加する。
 
 ```
 <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.CosmosDB" Version="3.0.10" />
 ```
-
-ここでは実際のredmineの呼び出しを行う「RSSPollingFuncLoop」はまだ作成せず、固定の値を返す「RSSPollingFuncLoopDummy」というダミーを作成する。
 
 #### メソッドの定義
 
@@ -332,11 +332,11 @@ public static async Task<(bool isChanged, IEnumerable<UpdateDocumentItem> update
 [ActivityTrigger] IDurableActivityContext context, ILogger log
 ```
 
-ここは決まり文句に近いものです。
+ここは決まり文句に近いもの。
 
-DulableFunctionsからの呼び出しを行うので、IDurableActivityContextでそのコンテキストを受け取ります。
+DulableFunctionsからの呼び出しを行うので、IDurableActivityContextでそのコンテキストを受け取る。
 
-ログの出力をするため、ILoggerを受け取ります。
+また、ログの出力をするため、ILoggerを受け取る。
 
 ##### CosmosDB 入力バインド
 
@@ -344,18 +344,147 @@ DulableFunctionsからの呼び出しを行うので、IDurableActivityContext�
     [CosmosDB("RssCheckData", "Items",
         ConnectionStringSetting = "DbRssCheckDataConnectString",
         SqlQuery = "select * from UpdateDocumentItems d ORDER BY d.Updated DESC OFFSET 0 LIMIT 1")]
+    IEnumerable<UpdateDocumentItem> updateDocumentLatest,
 ```
 
-TODO:手順記載
+この定義により、Function呼び出しの時に入力バインドとしてCosmosDBへクエリを発行し、その結果を引数updateDocumentLatestに入れて呼び出すところまでを、Azure側で行ってくれる。
+
+SqlQuery以外の引数では、CosmosDBのどこを読み書きするかを指定している。「CosmosDB作成」章でこれらを作成済みのはずなので、database名、container名、ConnectionStringの設定キー（後述）をここへ入れる。
+
+SqlQueryでは、Updatedの日時で降順ソートして、最新のレコードを1つだけ取得する、という指定をしている。
+
+##### CosmosDB 出力バインド
+
+```csharp
+[CosmosDB("RssCheckData", "Items",
+    ConnectionStringSetting = "DbRssCheckDataConnectString")]
+IAsyncCollector<UpdateDocumentItem> updateDocumentOut
+```
+
+この定義により、引数updateDocumentOutをCosmosDBへ出力バインドし、updateDocumentOutのメソッドでCosmosDBへの書き込みを行うことができる。引数は入力バインドと同様。
+
+例：
+```csharp
+await updateDocumentOut.AddAsync(new UpdateDocumentItem
+                    {
+                        IssueId = "1",
+                        Title = "Title1",
+                        Updated = DateTime.UtcNow,
+                    });
+```
 
 
 #### メソッドの実装
 
-TODO:手順記載
+テスト用のメソッドとして、CosmosDBから取得できたレコードが0個だったら、1つ追加する。そうでなければ、何もしない。という処理を入れる。
+
+```csharp
+
+[FunctionName("RSSPollingFuncDummy")]
+public static async Task RSSPollingFuncDummy([ActivityTrigger] IDurableActivityContext context, ILogger log,
+    [CosmosDB("RssCheckData", "Items",
+        ConnectionStringSetting = "DbRssCheckDataConnectString",
+        SqlQuery = "select * from UpdateDocumentItems d ORDER BY d.Updated DESC OFFSET 0 LIMIT 1")]
+    IEnumerable<UpdateDocumentItem> updateDocumentLatest,
+    [CosmosDB("RssCheckData", "Items",
+        ConnectionStringSetting = "DbRssCheckDataConnectString")]
+    IAsyncCollector<UpdateDocumentItem> updateDocumentOut)
+{
+    log.LogInformation($"RSSPollingFunc Start");
+    var updateLatest = updateDocumentLatest.FirstOrDefault();
+    log.LogInformation($"RSSPollingFunc Start, Latest={updateLatest}");
+
+    if (updateLatest != null)
+    {
+        return;
+    }
+
+    var addItems = new[]
+    {
+        new UpdateDocumentItem
+        {
+            IssueId = "1",
+            Title = "Title1",
+            Updated = DateTime.UtcNow,
+        }
+    };
+
+    foreach (var item in addItems)
+    {
+        await updateDocumentOut.AddAsync(item);
+    }
+
+}
+```
+
+### ConnectionString
+
+ConnectionStringの値をソースコードに直接書かず、jsonファイルから読み取らせるようにする。
+
+プロジェクト上のlocal.settings.jsonファイルを開くと、"Values"があるはずなので、そこに追加する。
+
+```json
+{
+    "IsEncrypted": false,
+    "Values": {
+      "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+      "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+      "DbRssCheckDataConnectString": "AccountEndpoint=～実際の値～;"
+    }
+}
+```
+
+DbRssCheckDataConnectStringというのは勝手に決めた変数名であり、他の値でも良い。これが、入力バインド・出力バインドに出てきた「設定キー」に当たる。
+
+## DurableFunctionsを動かしてみる（デバッグ実行）
+
+ここまでの実装を終えてビルドが通っていれば、デバッグ実行をすることができる。
+
+デバッグ実行をすると、コンソールアプリが立ち上がり、その中で次のようにテスト実行用のローカルのURLが表示される。
+
+```
+Functions:
+
+        RSSPollingFuncLoop_HttpStart: [GET,POST] http://localhost:7131/api/RSSPollingFuncLoop_HttpStart
+
+        RSSPollingFuncLoop_HttpStop: [GET,POST] http://localhost:7131/api/RSSPollingFuncLoop_HttpStop
+
+        RSSPollingFuncDummy: activityTrigger
+
+        RSSPollingFuncLoop: orchestrationTrigger
+```
+
+このRSSPollingFuncLoop_HttpStartのURLにWebブラウザでアクセスする。成功すれば、次のようにILoggerで出力した内容を含めたログが出るはず。
+
+```
+[2022-07-06T08:48:09.354Z] Executing 'RSSPollingFuncLoop_HttpStart' (Reason='This function was programmatically called via the host APIs.', Id=d77293c8-990e-462a-b197-6210f5724829)
+[2022-07-06T08:48:09.548Z] Started orchestration with ID = '48b1b5eccf044eab8ad91288fe60b35b'.
+[2022-07-06T08:48:09.598Z] Executed 'RSSPollingFuncLoop_HttpStart' (Succeeded, Id=d77293c8-990e-462a-b197-6210f5724829, Duration=286ms)
+[2022-07-06T08:48:09.743Z] Executing 'RSSPollingFuncLoop' (Reason='(null)', Id=74fc3db0-5f7c-4a45-855a-316a99ce4e29)
+[2022-07-06T08:48:09.795Z] Executed 'RSSPollingFuncLoop' (Succeeded, Id=74fc3db0-5f7c-4a45-855a-316a99ce4e29, Duration=58ms)
+[2022-07-06T08:48:12.148Z] Executing 'RSSPollingFuncDummy' (Reason='(null)', Id=3aae7646-1daa-4a1d-8059-a5de6ff9ce29)
+[2022-07-06T08:48:12.151Z] RSSPollingFunc Start
+[2022-07-06T08:48:12.152Z] RSSPollingFunc Start, Latest=
+[2022-07-06T08:48:12.253Z] Executed 'RSSPollingFuncDummy' (Succeeded, Id=3aae7646-1daa-4a1d-8059-a5de6ff9ce29, Duration=2290ms)
+[2022-07-06T08:48:12.584Z] Executing 'RSSPollingFuncLoop' (Reason='(null)', Id=6cc71ca8-378b-4be0-b3a5-b816463ee110)
+[2022-07-06T08:48:12.593Z] Executed 'RSSPollingFuncLoop' (Succeeded, Id=6cc71ca8-378b-4be0-b3a5-b816463ee110, Duration=8ms)
+```
+
+ここまで上手く行ったら、CosmosDBの中身をAzureポータルなどで確認してみると良い（CosmosDBの「作成後の確認」の章を参照）。
+
+ソースコード上で入れた値が、DB上に入っているはず。
+
+## DurableFunctionsを動かしてみる（Azureへ発行）
+
+
+※これ以降の記載は作成中
+
 
 
 
 ## redmineのAPI呼び出し
+
+※これ以降の記載は作成中
 
 ### redmineのセットアップ
 

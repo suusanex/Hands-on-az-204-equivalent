@@ -1,4 +1,4 @@
-using System;
+ï»¿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -28,12 +28,12 @@ namespace redmine_rss_func
 
         public async Task<IEnumerable<UpdateDocumentItem>> RSSGet()
         {
-            //è‡1. ƒ`ƒFƒbƒN‘ÎÛ‚ÌXV‚ªŠÜ‚Ü‚ê‚é‚æ‚¤‚É‚µ‚½RSS‚ÌURL‚ÆARSSƒAƒNƒZƒX—p‚ÌƒL[‚ğ—pˆÓ
+            //æ‰‹é †1. ãƒã‚§ãƒƒã‚¯å¯¾è±¡ã®æ›´æ–°ãŒå«ã¾ã‚Œã‚‹ã‚ˆã†ã«ã—ãŸRSSã®URLã¨ã€RSSã‚¢ã‚¯ã‚»ã‚¹ç”¨ã®ã‚­ãƒ¼ã‚’ç”¨æ„
             var rssUrl = $"http://your-redmine-root-url/projects/your-project-name/activity.atom";
             
             var atomKey = "f6012197692df72c5bb59698430e8143aeff13bb";
 
-            //è‡2. •’Ê‚ÌHttpClient‚ğ—pˆÓ‚µAƒL[•t‚«‚ÅRSS‚ğGet
+            //æ‰‹é †2. æ™®é€šã®HttpClientã‚’ç”¨æ„ã—ã€ã‚­ãƒ¼ä»˜ãã§RSSã‚’Get
             using var client = new HttpClient();
             {
                 var res = await client.GetAsync($"{rssUrl}?key={atomKey}");
@@ -44,7 +44,7 @@ namespace redmine_rss_func
 
                 var rssStr = await res.Content.ReadAsStringAsync();
 
-                //è‡3. RSS‚ÌXML‚ğ“Ç‚İ‚İAUpdateDocumentItem‚Æ‚¢‚¤Œ^i“Æ©j‚É•ÏŠ·
+                //æ‰‹é †3. RSSã®XMLã‚’èª­ã¿è¾¼ã¿ã€UpdateDocumentItemã¨ã„ã†å‹ï¼ˆç‹¬è‡ªï¼‰ã«å¤‰æ›
                 var xdoc = XDocument.Parse(rssStr);
                 var xns = xdoc.Root.Name.Namespace;
                 var entries = xdoc.Descendants(xns + "entry");
@@ -70,7 +70,7 @@ namespace redmine_rss_func
 
             if (journalId == null)
             {
-                //issue©‘Ì‚Ì“Y•tƒtƒ@ƒCƒ‹‚ğæ‚é
+                //issueè‡ªä½“ã®æ·»ä»˜ãƒ•ã‚¡ã‚¤ãƒ«ã‚’å–ã‚‹
                 using var client = new HttpClient();
                 {
                     var attachmentIds = new List<int>();
@@ -161,7 +161,7 @@ namespace redmine_rss_func
             }
             else
             {
-                //issue‚Ì“Á’èjournal‚Ì“Y•tƒtƒ@ƒCƒ‹‚ğæ‚é
+                //issueã®ç‰¹å®šjournalã®æ·»ä»˜ãƒ•ã‚¡ã‚¤ãƒ«ã‚’å–ã‚‹
 
                 //var content = new StringContent(reqJson.ToString(), Encoding.UTF8, "application/json");
                 //content.Headers.Add("X-Redmine-API-Key", apiKey);

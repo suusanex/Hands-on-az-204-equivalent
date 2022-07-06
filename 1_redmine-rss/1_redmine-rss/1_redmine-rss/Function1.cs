@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -21,18 +21,22 @@ namespace _1_redmine_rss
             [OrchestrationTrigger] IDurableOrchestrationContext context)
         {
 
-            var rssResult =
-                await context.CallActivityAsync<(bool isChanged, IEnumerable<UpdateDocumentItem> updateEntry)>("RSSPollingFunc", null);
+            //テスト用のFunctionを呼び出す処理。戻り値は取らない。
+            await context.CallActivityAsync("RSSPollingFuncDummy", null);
 
-
-            await context.CreateTimer(context.CurrentUtcDateTime.AddMinutes(1), CancellationToken.None);
-
-            context.ContinueAsNew(null);
+            //最終的に使用するFunction。テスト用のFunction使用中はコメントアウト。
+            //var rssResult =
+            //    await context.CallActivityAsync<(bool isChanged, IEnumerable<UpdateDocumentItem> updateEntry)>("RSSPollingFunc", null);
+            //
+            //
+            //await context.CreateTimer(context.CurrentUtcDateTime.AddMinutes(1), CancellationToken.None);
+            //
+            //context.ContinueAsNew(null);
         }
 
 
         [FunctionName("RSSPollingFuncDummy")]
-        public static async Task<(bool isChanged, IEnumerable<UpdateDocumentItem> updateEntry)> RSSPollingFuncDummy([ActivityTrigger] IDurableActivityContext context, ILogger log,
+        public static async Task RSSPollingFuncDummy([ActivityTrigger] IDurableActivityContext context, ILogger log,
             [CosmosDB("RssCheckData", "Items",
                 ConnectionStringSetting = "DbRssCheckDataConnectString",
                 SqlQuery = "select * from UpdateDocumentItems d ORDER BY d.Updated DESC OFFSET 0 LIMIT 1")]
@@ -45,23 +49,29 @@ namespace _1_redmine_rss
             var updateLatest = updateDocumentLatest.FirstOrDefault();
             log.LogInformation($"RSSPollingFunc Start, Latest={updateLatest}");
 
-            if (updateLatest == null)
+            if (updateLatest != null)
             {
-                return (true, new[]
-                {
-                    new UpdateDocumentItem
-                    {
-                        IssueId = "1",
-                        Title = "Title1",
-                        Updated = DateTime.UtcNow,
-                    }
-                });
+                return;
             }
 
-            return (false, Array.Empty<UpdateDocumentItem>());
+            var addItems = new[]
+            {
+                new UpdateDocumentItem
+                {
+                    IssueId = "1",
+                    Title = "Title1",
+                    Updated = DateTime.UtcNow,
+                }
+            };
+
+            foreach (var item in addItems)
+            {
+                await updateDocumentOut.AddAsync(item);
+            }
 
         }
 
+#if false
         [FunctionName("RSSPollingFunc")]
         public static async Task<(bool isChanged, IEnumerable<UpdateDocumentItem> updateEntry)> RSSPollingFunc([ActivityTrigger] IDurableActivityContext context, ILogger log,
             [CosmosDB("RssCheckData", "Items",
@@ -99,6 +109,7 @@ namespace _1_redmine_rss
                 return (false, Array.Empty<UpdateDocumentItem>());
             }
         }
+#endif
 
         [FunctionName("RSSPollingFuncLoop_HttpStart")]
         public static async Task<HttpResponseMessage> HttpStart(
